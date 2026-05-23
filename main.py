@@ -50,7 +50,7 @@ except ImportError:
 
 # --- 2. 系统与配置管理 ---
 pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.05  # 增加全局操作间隔，提升稳定性
+pyautogui.PAUSE = 0.05  # 全局操作间隔，提升稳定性
 
 # Windows API 常量
 user32 = ctypes.windll.user32
@@ -121,7 +121,7 @@ COLORS.update({
     'breakpoint': '#e53935', 'log_bg': '#1e1e1e', 'log_fg': '#d4d4d4', 'win_node': '#009688'
 })
 
-# [修复] 提升全局字体清晰度，增加字号，统一使用微软雅黑
+# 提升全局字体清晰度，增加字号，统一使用微软雅黑
 FONTS = {
     'node_title': ('Microsoft YaHei', int(10 * SCALE_FACTOR), 'bold'), 
     'node_text': ('Microsoft YaHei', int(9 * SCALE_FACTOR)),
@@ -159,7 +159,7 @@ NODE_CONFIG = {
     'wait':     {'title': '⏳ 延时', 'outputs': ['out'], 'color': '#4527a0', 'desc': '等待指定时间'},
     'mouse':    {'title': '👆 鼠标', 'outputs': ['out'], 'color': '#1565c0', 'desc': '点击、移动、拖拽或滚动'},
     'keyboard': {'title': '⌨️ 键盘', 'outputs': ['out'], 'color': '#1565c0', 'desc': '输入文本或按下组合键'},
-    'clipboard':{'title': '📋 剪贴板', 'outputs': ['out'], 'color': '#00838f', 'desc': '读取或写入系统剪贴板内容'}, # [修复] 新增剪贴板节点
+    'clipboard':{'title': '📋 剪贴板', 'outputs': ['out'], 'color': '#00838f', 'desc': '读取或写入系统剪贴板内容'},
     'notify':   {'title': '🔔 提示', 'outputs': ['out'], 'color': '#fdd835', 'desc': '显示屏幕通知气泡'},
     'cmd':      {'title': '💻 命令', 'outputs': ['out'], 'color': '#1565c0', 'desc': '执行系统CMD命令'},
     'web':      {'title': '🔗 网页', 'outputs': ['out'], 'color': '#0277bd', 'desc': '打开指定的URL'},
@@ -282,9 +282,9 @@ class WindowEngine:
         length = user32.GetWindowTextLengthW(hwnd)
         title = ""
         if length > 0:
-            buff = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buff, length + 1)
-            title = buff.value
+            bytes_buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, bytes_buffer, length + 1)
+            title = bytes_buffer.value
         cls_buff = ctypes.create_unicode_buffer(256)
         user32.GetClassNameW(hwnd, cls_buff, 256)
         class_name = cls_buff.value
@@ -603,8 +603,8 @@ class AutomationCore:
         self.app.after(0, lambda: self.app.update_debug_btn_state(False))
     
     def _smart_wait(self, seconds):
-        end_time = time.time() + seconds
-        while time.time() < end_time:
+        append_time = time.time() + seconds
+        while time.time() < append_time:
             if self.stop_event.is_set(): return False
             self._check_pause(); time.sleep(0.05)
         return True
@@ -674,8 +674,13 @@ class AutomationCore:
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
         try:
-            for k, v in self.runtime_memory.items(): text = text.replace(f'${{{k}}}', str(v) if v is not None else "")
-        except: pass
+            # 改进：同时兼容 {变量名}、${变量名} 和 简写 $变量名 替换模式
+            for k, v in self.runtime_memory.items(): 
+                val_str = str(v) if v is not None else ""
+                text = text.replace(f'${{{k}}}', val_str)
+                text = text.replace(f'${k}', val_str)
+                text = text.replace(f'{{{k}}}', val_str)
+        except Exception: pass
         return text
     
     def _update_context_rect(self):
@@ -706,7 +711,9 @@ class AutomationCore:
     def _execute_node(self, node):
         if self.stop_event.is_set(): return '__STOP__'
         ntype = node['type']
-        data = {k: (self._replace_variables(v) if isinstance(v, str) and '${' in v else v) for k, v in node.get('data', {}).items()}
+        
+        # 兼容性动态求值（当字符串包含 '$' 或 '{' 符号时，说明可能包含对应规则的变量占位符，触发翻译解析）
+        data = {k: (self._replace_variables(v) if isinstance(v, str) and ('$' in v or '{' in v) else v) for k, v in node.get('data', {}).items()}
         
         # 窗口上下文维护
         if self.context['window_handle']: 
@@ -722,9 +729,16 @@ class AutomationCore:
         
         if ntype == 'notify':
             msg = data.get('msg', '执行到此节点')
+            
+            # 支持动态显示全部变量的特殊语法（兼容花括号和美元花括号）
+            if "{ALL_VARS}" in msg.upper() or "{所有变量}" in msg or "${ALL_VARS}" in msg.upper() or "${所有变量}" in msg:
+                vars_list_str = "\n".join([f"• {k} = {v}" for k, v in self.runtime_memory.items()]) if self.runtime_memory else "（目前无任何内存变量）"
+                msg = msg.replace("${ALL_VARS}", vars_list_str).replace("${all_vars}", vars_list_str).replace("${所有变量}", vars_list_str).replace("{ALL_VARS}", vars_list_str).replace("{all_vars}", vars_list_str).replace("{所有变量}", vars_list_str)
+                
             use_sound = bool(data.get('use_sound', False))
             duration = safe_int(safe_float(data.get('duration', 2.0)) * 1000)
             self.app.after(0, lambda: VisualTips.show_toast(msg, duration, use_sound))
+            self.log(f"🔔 提示内容: {msg}", "info")  # 将提示结果同时渲染到软件内置执行日志中
             return 'out'
 
         if ntype == 'open_app':
@@ -771,7 +785,6 @@ class AutomationCore:
             if data.get('var_name'): self.runtime_memory[data['var_name']] = data.get('var_value', '')
             return 'out'
 
-        # [修复] 剪贴板读取写入支持
         if ntype == 'clipboard':
             mode = data.get('clip_mode', 'read')
             if mode == 'read':
@@ -875,7 +888,7 @@ class AutomationCore:
                     if not res: return 'timeout'
                     if i == 0: primary_res = res
                 if primary_res:
-                    off_x, off_y = safe_int(data.get('target_rect_x',0))-anchors[0].get('rect_x',0), safe_int(data.get('target_rect_y',0))-anchors[0].get('rect_y',0)
+                    off_x, off_y = safe_int(data.get('target_rect_x',0))-anchors[0].get('rect_y',0), safe_int(data.get('target_rect_y',0))-anchors[0].get('rect_y',0)
                     search_region = (max(0, int(primary_res.left+off_x)-15), max(0, int(primary_res.top+off_y)-15), safe_int(data.get('target_rect_w',100))+30, safe_int(data.get('target_rect_h',100))+30)
 
             start_time = time.time()
@@ -915,6 +928,7 @@ class AutomationCore:
             with self.io_lock:
                 action = data.get('mouse_action', 'click')
                 dur = safe_float(data.get('duration', 0.5))
+                coord_mode = data.get('coord_mode', 'relative')
                 
                 if action == 'drag':
                     start_x = safe_int(data.get('start_x', 0)) 
@@ -922,10 +936,16 @@ class AutomationCore:
                     end_x = safe_int(data.get('end_x', 0))
                     end_y = safe_int(data.get('end_y', 0))
                     
-                    start_x_screen = start_x + win_offset_x
-                    start_y_screen = start_y + win_offset_y
-                    end_x_screen = end_x + win_offset_x
-                    end_y_screen = end_y + win_offset_y
+                    if coord_mode == 'relative' and self.context['window_handle']:
+                        start_x_screen = start_x + win_offset_x
+                        start_y_screen = start_y + win_offset_y
+                        end_x_screen = end_x + win_offset_x
+                        end_y_screen = end_y + win_offset_y
+                    else:
+                        start_x_screen = start_x
+                        start_y_screen = start_y
+                        end_x_screen = end_x
+                        end_y_screen = end_y
                     
                     pyautogui.moveTo(start_x_screen, start_y_screen, duration=0.1)
                     pyautogui.dragTo(end_x_screen, end_y_screen, button='left', duration=dur)
@@ -935,8 +955,12 @@ class AutomationCore:
 
                 else:
                     raw_x, raw_y = safe_int(data.get('x',0)), safe_int(data.get('y',0))
-                    target_x = raw_x + win_offset_x
-                    target_y = raw_y + win_offset_y
+                    if coord_mode == 'relative' and self.context['window_handle']:
+                        target_x = raw_x + win_offset_x
+                        target_y = raw_y + win_offset_y
+                    else:
+                        target_x = raw_x
+                        target_y = raw_y
                     
                     if action == 'click': 
                         pyautogui.click(x=target_x, y=target_y, clicks=safe_int(data.get('click_count', 1)), button=data.get('mouse_button', 'left'), duration=dur, interval=0.1)
@@ -947,15 +971,56 @@ class AutomationCore:
             return 'out'
         
         if ntype == 'keyboard':
-            self._ensure_window_focus()
             with self.io_lock:
-                if data.get('kb_mode', 'text') == 'text':
-                    text = data.get('text','')
-                    mode = 'paste' if data.get('use_paste', True) else 'direct'
-                    KeyboardEngine.safe_write(text, mode)
-                    if data.get('press_enter', False): pyautogui.press('enter')
+                if data.get('kb_mode', 'text') == 'text': 
+                    pyautogui.write(data.get('text',''))
+                    if data.get('press_enter', False): 
+                        pyautogui.press('enter')
                 else: 
-                    pyautogui.hotkey(*[x.strip() for x in data.get('key_name', 'enter').lower().split('+')])
+                    from pynput.keyboard import Controller, Key
+                    kb = Controller()
+                    keys = [x.strip().lower() for x in data.get('key_name', 'enter').split('+')]
+            
+                    # 按下所有修饰键
+                    modifiers = []
+                    main_key = None
+                    for k in keys:
+                        if k in ['alt', 'ctrl', 'shift', 'win']:
+                            modifiers.append(k)
+                        else:
+                            main_key = k
+            
+                    # 按下修饰键
+                    for m in modifiers:
+                        if m == 'alt': kb.press(Key.alt)
+                        elif m == 'ctrl': kb.press(Key.ctrl)
+                        elif m == 'shift': kb.press(Key.shift)
+                        elif m == 'win': kb.press(Key.cmd)
+            
+                    # 按下主键
+                    if main_key == 'left': kb.press(Key.left)
+                    elif main_key == 'right': kb.press(Key.right)
+                    elif main_key == 'up': kb.press(Key.up)
+                    elif main_key == 'down': kb.press(Key.down)
+                    elif main_key == 'enter': kb.press(Key.enter)
+                    elif main_key == 'space': kb.press(Key.space)
+                    elif main_key == 'tab': kb.press(Key.tab)
+                    elif main_key == 'escape': kb.press(Key.esc)
+                    else: kb.press(main_key)
+            
+                    # 释放（先释放主键，再释放修饰键）
+                    if main_key:
+                        if main_key == 'left': kb.release(Key.left)
+                        elif main_key == 'right': kb.release(Key.right)
+                        elif main_key == 'up': kb.release(Key.up)
+                        elif main_key == 'down': kb.release(Key.down)
+                        else: kb.release(main_key)
+            
+                    for m in reversed(modifiers):
+                        if m == 'alt': kb.release(Key.alt)
+                        elif m == 'ctrl': kb.release(Key.ctrl)
+                        elif m == 'shift': kb.release(Key.shift)
+                        elif m == 'win': kb.release(Key.cmd)
             return 'out'
         
         if ntype == 'cmd':
@@ -1207,7 +1272,12 @@ class GraphNode:
         if str(self.data.get(key)) == str(value): return
         if refresh_ui: self.canvas.history.save_state()
         self.data[key] = value
-        if key in ['cases', 'var_name', 'image', 'images', 'roi_preview', 'path', 'exe_name', 'class_name', 'title', '_user_title']: self.draw() 
+        
+        # 核心修复：添加所有在画布中使用的输入和选择键。当它们变化时触发画布静默重繪，彻底防范微型组件失焦导致的旧文本写回冲突。
+        redraw_keys = ['msg', 'seconds', 'count', 'command', 'title', 'text', 'mouse_action', 'cases', 'var_name', 'image', 'images', 'roi_preview', 'path', 'exe_name', 'class_name', '_user_title']
+        if key in redraw_keys: 
+            self.draw() 
+            
         if refresh_ui and self.canvas.app.property_panel.current_node == self: 
            self.canvas.app.property_panel.load_node(self)
 
@@ -1505,7 +1575,7 @@ class PropertyPanel(tk.Frame):
              self._chk(self.content, "无限循环", 'infinite', data.get('infinite', True))
              if not data.get('infinite', True): self._input(self.content, "循环次数", 'count', data.get('count', 5), safe_int)
         elif ntype == 'notify':
-             self._input(self.content, "提示内容", 'msg', data.get('msg', '执行到此节点'))
+             self._input(self.content, "提示内容", 'msg', data.get('msg', '当前所有变量: {ALL_VARS}'))
              self._input(self.content, "持续时间(秒)", 'duration', data.get('duration', 2.0), safe_float)
              self._chk(self.content, "提示音", 'use_sound', data.get('use_sound', False))
         elif ntype == 'set_var':
@@ -1553,6 +1623,12 @@ class PropertyPanel(tk.Frame):
         elif ntype == 'web': self._input(self.content, "URL", 'url', data.get('url', ''))
         elif ntype == 'mouse':
             sec = self._create_section("鼠标操作")
+            
+            # [显式坐标模式] 允许用户自主选择相对或绝对
+            COORD_MODES = {'relative': '相对绑定窗口 (推荐)', 'absolute': '绝对屏幕坐标'}
+            curr_mode = data.get('coord_mode', 'relative')
+            self._combo(sec, "坐标模式", 'coord_mode', list(COORD_MODES.values()), COORD_MODES.get(curr_mode, '相对绑定窗口 (推荐)'), 
+                        lambda e: self._save('coord_mode', {v:k for k,v in COORD_MODES.items()}.get(e.widget.get()), self.current_node, refresh_ui=True))
             
             def on_action_change(e):
                 val = {v:k for k,v in MOUSE_ACTIONS.items()}.get(e.widget.get())
@@ -1727,7 +1803,6 @@ class PropertyPanel(tk.Frame):
         tk.Frame(f, height=1, bg=COLORS['bg_header']).pack(fill='x', pady=(2, 5))
         return f
     
-    # [修复] 传递 refresh_ui=False 禁止强制刷新UI，解决输入打断问题；并修正 history 归属
     def _input(self, parent, label, key, val, vfunc=None):
         target_node = self.current_node 
         f = tk.Frame(parent, bg=parent.cget('bg')); f.pack(fill='x', pady=2)
@@ -1741,7 +1816,6 @@ class PropertyPanel(tk.Frame):
         
         e = tk.Entry(f, bg=COLORS['input_bg'], fg='white', bd=0, insertbackground='white', font=('Microsoft YaHei', int(10 * SCALE_FACTOR)), textvariable=var)
         e.pack(fill='x', pady=2, ipady=3, expand=True)
-        # [修复] 失去焦点时保存历史记录（指向真正的 Editor）
         e.bind("<FocusOut>", lambda ev: self.app.editor.history.save_state())
         e.bind("<Return>", lambda ev: self.app.editor.focus_set())
         
@@ -1773,7 +1847,6 @@ class PropertyPanel(tk.Frame):
         
         e = tk.Entry(parent, bg=COLORS['input_bg'], fg='white', bd=0, width=6, textvariable=var)
         e.pack(side='left', padx=2)
-        # [修复] 失去焦点时保存历史记录（指向真正的 Editor）
         e.bind("<FocusOut>", lambda ev: self.app.editor.history.save_state())
         e.bind("<Return>", lambda ev: self.app.editor.focus_set())
         
@@ -1984,19 +2057,18 @@ class App(tk.Tk):
         
         self.update_title()
         self.after(100, self._poll_log)
-        # [新增] 启动 500 毫秒后显示欢迎引导
         self.after(500, self.show_welcome_guide)
 
     def update_title(self):
         filename = os.path.basename(self.current_file_path) if self.current_file_path else "未命名"
-        self.title(f"Qflow 1.7.4 - QwejayHuang - {filename}")
+        self.title(f"Qflow 1.7.5 - QwejayHuang - {filename}")
 
     def _setup_ui(self):
         self.configure(bg=COLORS['bg_app'])
         for widget in self.winfo_children(): widget.destroy()
 
         title_bar = tk.Frame(self, bg=COLORS['bg_app'], height=50); title_bar.pack(fill='x', pady=5, padx=20)
-        tk.Label(title_bar, text="QFLOW 1.7.4", font=('Impact', 24), bg=COLORS['bg_app'], fg=COLORS['accent']).pack(side='left', padx=(0, 20))
+        tk.Label(title_bar, text="QFLOW", font=('Impact', 24), bg=COLORS['bg_app'], fg=COLORS['accent']).pack(side='left', padx=(0, 20))
         
         ops = tk.Frame(title_bar, bg=COLORS['bg_app']); ops.pack(side='left')
         for txt, cmd in [("📂 打开", self.load), ("💾 保存", self.save), ("📝 另存", self.save_as), ("🗑️ 清空", self.clear), ("⚙️ 设置", self.open_settings)]:
@@ -2106,7 +2178,6 @@ class App(tk.Tk):
         
         try:
             img = ImageGrab.grab(bbox=(x1, y1, x2, y2), all_screens=True)
-            
             self.deiconify()
             
             if (n := self.property_panel.current_node): 
@@ -2126,52 +2197,96 @@ class App(tk.Tk):
         except Exception as e: 
             self.deiconify()
             self.log(f"截图失败: {e}", "error")
-    
-    def pick_coordinate(self): self.iconify(); self.after(500, lambda: self._coord_overlay())
-    def _coord_overlay(self):
-        top=tk.Toplevel(self);
+
+    def get_active_bind_window_info(self):
+        """查找流程中配置的窗口绑定节点，若窗口处于打开状态，则返回句柄、边界矩形及标题"""
+        for nid, node in self.editor.nodes.items():
+            if node.type == 'bind_win':
+                exe_name = node.data.get('exe_name', '')
+                class_name = node.data.get('class_name', '')
+                title = node.data.get('title', '')
+                use_exe = bool(node.data.get('use_exe', True))
+                use_class = bool(node.data.get('use_class', True))
+                use_title = bool(node.data.get('use_title', False))
+                target_exe = exe_name if use_exe else None
+                target_class = class_name if use_class else None
+                target_title = title if use_title else None
+                if not target_exe and not target_class and not target_title: 
+                    target_title = title
+                hwnd = WindowEngine.smart_find_window(target_exe, target_class, target_title)
+                if hwnd:
+                    rect = WindowEngine.get_window_rect(hwnd)
+                    if rect:
+                        return {'hwnd': hwnd, 'rect': rect, 'title': title or exe_name or class_name or "未命名窗口"}
+        return None
+
+    # --- 统一集成的智能拾取机制 ---
+    def pick_coordinate(self): 
+        self.iconify()
+        self.after(400, lambda: self._coord_overlay('x', 'y'))
+        
+    def pick_start_coordinate(self): 
+        self.iconify()
+        self.after(400, lambda: self._coord_overlay('start_x', 'start_y'))
+        
+    def pick_end_coordinate(self): 
+        self.iconify()
+        self.after(400, lambda: self._coord_overlay('end_x', 'end_y'))
+
+    def _coord_overlay(self, key_x='x', key_y='y'):
+        top = tk.Toplevel(self)
         top.geometry(f"{VW}x{VH}+{VX}+{VY}")
         top.overrideredirect(True)
-        top.attributes("-topmost",True,"-alpha",0.1);c=tk.Canvas(top,bg="white");c.pack(fill='both',expand=True)
+        top.attributes("-topmost", True, "-alpha", 0.3)
+        top.configure(cursor="cross", bg="black")
+        
+        c = tk.Canvas(top, bg="black", highlightthickness=0)
+        c.pack(fill='both', expand=True)
+
+        # 智能匹配窗口绑定状态
+        bind_info = self.get_active_bind_window_info()
+        rect = bind_info['rect'] if bind_info else None
+        
+        if rect:
+            # 扣除多显示器虚拟桌面起始坐标，转为拾取窗口内的画布坐标
+            cx1, cy1 = rect.left - VX, rect.top - VY
+            cx2, cy2 = (rect.left + rect.width) - VX, (rect.top + rect.height) - VY
+            
+            # 在全屏覆盖层上使用高亮虚线框勾勒出用户绑定的窗口边界
+            c.create_rectangle(cx1, cy1, cx2, cy2, outline='#64b5f6', width=3, dash=(4,4))
+            c.create_text(cx1 + 10, cy1 + 20, text=f"⚓ 绑定窗口范围: {bind_info['title']}", fill='#64b5f6', font=('Microsoft YaHei', 11, 'bold'), anchor='w')
+            c.create_text(VW//2, 50, text="[当前为：窗口绑定模式] 拾取的坐标已自动扣除窗口左上角偏移量（保存为相对坐标）", fill='#81c784', font=('Microsoft YaHei', 13, 'bold'), anchor='center')
+        else:
+            c.create_text(VW//2, 50, text="[当前为：绝对坐标模式] 未检测到运行中的绑定窗口，将保存为绝对屏幕坐标", fill='#ffd54f', font=('Microsoft YaHei', 13, 'bold'), anchor='center')
+
+        c.create_text(VW//2, 85, text="点击鼠标左键确认拾取 | 按键盘 ESC 可直接取消返回", fill='#ffffff', font=('Microsoft YaHei', 11), anchor='center')
+
         def clk(e): 
-            top.destroy(); self.deiconify(); 
-            abs_x = e.x + VX
-            abs_y = e.y + VY
+            top.destroy()
+            self.deiconify()
+            
+            # 使用 Windows 原生 API 检索鼠标当前全局物理绝对坐标，彻底根治多屏与缩放导致的偏移 Bug
+            class POINT(ctypes.Structure): _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            pt = POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            abs_x, abs_y = pt.x, pt.y
+            
+            final_x, final_y = abs_x, abs_y
+            if rect:
+                # 求出物理绝对坐标同目标绑定窗口左上角起点的差值
+                final_x = abs_x - rect.left
+                final_y = abs_y - rect.top
+                self.log(f"📍 坐标拾取完成: 相对坐标 ({final_x}, {final_y}) (屏幕绝对坐标: {abs_x}, {abs_y})", "success")
+            else:
+                self.log(f"📍 坐标拾取完成: 绝对屏幕坐标 ({final_x}, {final_y})", "success")
+            
             if self.property_panel.current_node:
-                self.property_panel.current_node.update_data('x', abs_x)
-                self.property_panel.current_node.update_data('y', abs_y)
+                self.property_panel.current_node.update_data(key_x, final_x)
+                self.property_panel.current_node.update_data(key_y, final_y)
                 self.property_panel.load_node(self.property_panel.current_node)
-        c.bind("<Button-1>",clk)
-    
-    def pick_start_coordinate(self): 
-        self.iconify(); self.log("🎯 请选择拖拽起始坐标", "info"); self.after(500, lambda: self._start_coord_overlay())
-    def _start_coord_overlay(self):
-        top=tk.Toplevel(self); top.geometry(f"{VW}x{VH}+{VX}+{VY}"); top.overrideredirect(True)
-        top.attributes("-topmost",True,"-alpha",0.1);c=tk.Canvas(top,bg="white");c.pack(fill='both',expand=True)
-        def clk(e): 
-            top.destroy(); self.deiconify()
-            abs_x, abs_y = e.x + VX, e.y + VY
-            if self.property_panel.current_node:
-                self.property_panel.current_node.update_data('start_x', abs_x)
-                self.property_panel.current_node.update_data('start_y', abs_y)
-                self.property_panel.load_node(self.property_panel.current_node)
-                self.log(f"✅ 起始坐标已设置: ({abs_x}, {abs_y})", "success")
-        c.bind("<Button-1>",clk)
-    
-    def pick_end_coordinate(self): 
-        self.iconify(); self.log("🎯 请选择拖拽目标坐标", "info"); self.after(500, lambda: self._end_coord_overlay())
-    def _end_coord_overlay(self):
-        top=tk.Toplevel(self); top.geometry(f"{VW}x{VH}+{VX}+{VY}"); top.overrideredirect(True)
-        top.attributes("-topmost",True,"-alpha",0.1);c=tk.Canvas(top,bg="white");c.pack(fill='both',expand=True)
-        def clk(e): 
-            top.destroy(); self.deiconify()
-            abs_x, abs_y = e.x + VX, e.y + VY
-            if self.property_panel.current_node:
-                self.property_panel.current_node.update_data('end_x', abs_x)
-                self.property_panel.current_node.update_data('end_y', abs_y)
-                self.property_panel.load_node(self.property_panel.current_node)
-                self.log(f"✅ 目标坐标已设置: ({abs_x}, {abs_y})", "success")
-        c.bind("<Button-1>",clk)
+        
+        c.bind("<Button-1>", clk)
+        top.bind("<Escape>", lambda ev: [top.destroy(), self.deiconify()])
 
     # 快捷键与运行控制
     def refresh_hotkeys(self):
@@ -2210,7 +2325,6 @@ class App(tk.Tk):
         self.after(0, _task)
     def select_node_safe(self, nid): self.after(0, lambda: self.editor.select_node(nid))
     
-    # [修复] 增加原位保存和另存为逻辑
     def save(self):
         if self.current_file_path:
             try:
@@ -2248,8 +2362,8 @@ class App(tk.Tk):
         self.log("✨ 欢迎使用 Qflow-AI办公自动化软件！", "success")
         self.log("*.  快速上手指引：", "info")
         self.log("1. 【添加节点】从左侧工具栏直接 [拖动] 节点图标到中间画布。", "info")
-        self.log("2. 【建立连线】点击节点右侧的 [○ 端口] 并拖动到另一个节点上。", "info")
-        self.log("3. 【配置属性】单击选中画布上的节点，在右侧面板设置具体参数。", "info")
+        self.log("2. 【建立连线】点击节点右侧 of [○ 端口] 并拖动到另一个节点上。", "info")
+        self.log("3. 【配置属性】单选画布上的节点，在右侧面板设置具体参数。", "info")
         self.log("4. 【右键菜单】右键点击 [节点] 可复制或删除；右键点击 [端口] 可清除连线。", "warning")
         self.log("5. 【运行控制】点击上方 [▶ 启动] 或使用快捷键 F9 (启动) / F10 (停止)。", "success")
 
