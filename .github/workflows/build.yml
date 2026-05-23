@@ -5,15 +5,15 @@ on:
     branches:
       - main
     tags:
-      - 'v*'      # 兼容带 v 的 Tag (如 v1.7.0)
-      - '[0-9]*'  # 兼容纯数字的 Tag (如 1.7.0)
+      - 'v*'     
+      - '[0-9]*' 
   pull_request:
     branches:
       - main
   workflow_dispatch:
     inputs:
       version:
-        description: '手动构建版本号 (例如: 1.7.0)'
+        description: ''
         required: true
         default: '1.7.0'
 
@@ -24,42 +24,34 @@ jobs:
       contents: write
 
     steps:
-      # 1. 检出代码库
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. 设置 Python 环境
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 3. 安装依赖（包含 zstandard 高效压缩）
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install nuitka ordered-set zstandard
 
-      # 4. 解析版本号（强制滤除任何首字母 'v' 或 'V'）
       - name: Resolve Version
         id: version
         shell: bash
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            # 1. 如果是 Tag 触发，直接使用 Tag 名
             ORIGINAL_VER="${{ github.ref_name }}"
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # 2. 如果是手动触发，使用输入的版本号
             ORIGINAL_VER="${{ github.event.inputs.version }}"
           else
-            # 3. 普通 push/PR 触发测试，设为临时开发版本
             ORIGINAL_VER="1.7.0-dev"
           fi
           
-          # 强制去除开头的 'v' 或 'V' 字符 (不论是 v1.7.0 还是 1.7.0，均统一净化为 1.7.0)
           CLEAN_VER=$(echo "$ORIGINAL_VER" | sed -E 's/^[vV]//g')
           
           # 用于 Windows 的 Nuitka 属性要求，必须为纯数字 X.Y.Z 格式（去除 -dev 等后缀）
@@ -71,13 +63,11 @@ jobs:
           echo "clean_version=$CLEAN_VER" >> $GITHUB_OUTPUT
           echo "metadata_version=$METADATA_VER" >> $GITHUB_OUTPUT
 
-      # 5. 使用 Nuitka 进行打包
       - name: Build with Nuitka
         run: |
           $version = "${{ steps.version.outputs.clean_version }}"
           $metadataVersion = "${{ steps.version.outputs.metadata_version }}"
           
-          # Nuitka 深度优化参数配置
           $nuitkaParams = @(
             "-m", "nuitka",
             "--standalone",
@@ -89,31 +79,26 @@ jobs:
             "--output-dir=dist",
             "--clean-cache=all",
             "--remove-output",
-            "--noinclude-unittest-mode=true",
-            "--noinclude-pytest-mode=true",
-            "--noinclude-setuptools-mode=true",
+            "--noinclude-unittest-mode=nofollow",    # 已修正为 nofollow
+            "--noinclude-pytest-mode=nofollow",      # 已修正为 nofollow
+            "--noinclude-setuptools-mode=nofollow",  # 已修正为 nofollow
             "--assume-yes-for-downloads"
           )
           
-          # 自动检测并启用 GUI 库对应的 Nuitka 编译插件
           $pipList = pip list
           if ($pipList -match "PyQt5") { $nuitkaParams += "--enable-plugin=pyqt5" }
           if ($pipList -match "PyQt6") { $nuitkaParams += "--enable-plugin=pyqt6" }
           if ($pipList -match "PySide6") { $nuitkaParams += "--enable-plugin=pyside6" }
           
-          # 检查并配置图标和数据资源文件
           if (Test-Path "icon.ico") {
             $nuitkaParams += "--windows-icon-from-ico=icon.ico"
             $nuitkaParams += "--include-data-files=icon.ico=."
           }
           
-          # 主入口文件
           $nuitkaParams += "main.py"
           
-          # 运行编译
           python @nuitkaParams
           
-          # 将编译生成的文件重命名为 Qflow_[版本号].exe (不带任何 V 前缀)
           if (Test-Path "dist/main.exe") {
             Rename-Item -Path "dist/main.exe" -NewName "Qflow_$version.exe"
             Write-Host "成功生成：dist/Qflow_$version.exe"
@@ -123,7 +108,6 @@ jobs:
           }
         shell: pwsh
 
-      # 6. 上传构建产物作为 Artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -131,7 +115,6 @@ jobs:
           path: dist/Qflow_*.exe
           retention-days: 5
 
-      # 7. 生成变更日志
       - name: Generate changelog
         id: changelog
         run: |
@@ -141,12 +124,11 @@ jobs:
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
 
-      # 8. 仅在推送 Tag 时触发 Release 创建并上传构建产物
       - name: Create Release and Upload Asset
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }} # 仍关联您实际推送的 Tag (如 v1.7.0 或 1.7.0)
+          tag_name: ${{ github.ref_name }}
           name: Qflow ${{ steps.version.outputs.clean_version }} # Release 标题净化显示为 Qflow 1.7.0
           body: |
             ## Latest Change
