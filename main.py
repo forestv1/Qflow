@@ -29,7 +29,6 @@ __author__     = "QwejayHuang"
 __company__    = "QwejayHuang"
 __description__= "可视化节点办公自动化引擎"
 
-# --- 1. 可选依赖库统一检查 ---
 HAS_PYPERCLIP = HAS_OPENCV = HAS_AUDIO = False
 
 try: import pyperclip; HAS_PYPERCLIP = True
@@ -45,16 +44,13 @@ try:
     HAS_AUDIO = True
 except ImportError: print("⚠️ 提示: 未安装 pycaw 或 comtypes，声音检测节点将不可用。")
 
-# --- 2. 系统与配置管理 ---
 pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.05  # 全局操作间隔，提升稳定性
+pyautogui.PAUSE = 0.05
 
-# Windows API 常量
 user32 = ctypes.windll.user32
 shcore = ctypes.windll.shcore
 
 def get_virtual_screen_geometry():
-    """获取所有屏幕组成的虚拟桌面坐标范围 (修复多屏截图问题)"""
     try:
         return (
             user32.GetSystemMetrics(76), # SM_XVIRTUALSCREEN
@@ -65,13 +61,12 @@ def get_virtual_screen_geometry():
     except:
         return 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
-# 获取虚拟屏幕参数
 VX, VY, VW, VH = get_virtual_screen_geometry()
 
 def get_scale_factor():
     try:
         if sys.platform.startswith('win'):
-            try: shcore.SetProcessDpiAwareness(1) # 使用系统级感知，避免坐标错乱
+            try: shcore.SetProcessDpiAwareness(1)
             except: user32.SetProcessDPIAware()
         log_w, log_h = pyautogui.size()
         phy_w, phy_h = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
@@ -91,7 +86,6 @@ def safe_int(value, default=0):
     try: return int(float(value))
     except (ValueError, TypeError): return default
 
-# --- 主题定义 ---
 THEMES = {
     'Dark': {
         'bg_app': '#202020', 'bg_sidebar': '#2B2B2B', 'bg_canvas': '#181818', 'bg_panel': '#2B2B2B',
@@ -118,14 +112,14 @@ COLORS.update({
     'breakpoint': '#e53935', 'log_bg': '#1e1e1e', 'log_fg': '#d4d4d4', 'win_node': '#009688'
 })
 
-# 提升全局字体清晰度，增加字号，统一使用微软雅黑
 FONTS = {
     'node_title': ('Microsoft YaHei', int(10 * SCALE_FACTOR), 'bold'), 
     'node_text': ('Microsoft YaHei', int(9 * SCALE_FACTOR)),
     'code': ('Consolas', int(10 * SCALE_FACTOR)), 
     'small': ('Microsoft YaHei', int(9 * SCALE_FACTOR)),
-    'log': ('Consolas', int(10 * SCALE_FACTOR))
+    'log': ('Consolas', int(11 * SCALE_FACTOR)) 
 }
+
 
 SETTINGS = {
     'hotkey_start': '<f9>',
@@ -176,7 +170,6 @@ MOUSE_BUTTONS = {'left': '左键', 'right': '右键', 'middle': '中键'}
 ACTION_MAP = {'click': '单击左键', 'double_click': '双击左键', 'right_click': '单击右键', 'none': '不执行操作'}
 MATCH_STRATEGY_MAP = {'hybrid': '智能混合', 'template': '模板匹配', 'feature': '特征匹配'}
 
-# --- 3. 基础工具类 ---
 class ToolTip:
     def __init__(self, widget, text):
         self.widget = widget
@@ -231,7 +224,6 @@ class KeyboardEngine:
                 time.sleep(0.005)
 
 class VisualTips:
-    """视觉提示小窗"""
     @staticmethod
     def show_toast(message, duration=2000, use_sound=False):
         try:
@@ -272,7 +264,6 @@ class WindowEngine:
                     pid_map[pe32.th32ProcessID] = exe_name
                     if not ctypes.windll.kernel32.Process32Next(hSnap, ctypes.byref(pe32)): break
         finally:
-            # 确保即使遇到解码异常，句柄也一定会被释放
             ctypes.windll.kernel32.CloseHandle(hSnap)
         return pid_map
 
@@ -525,7 +516,6 @@ class VisionEngine:
             return (1.0 - (sum(diff.histogram()[10:]) / (img1.size[0] * img1.size[1]))) >= threshold
         except: return False
 
-# --- 4. 日志与核心 ---
 class LogPanel(tk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, bg=COLORS['bg_panel'], **kwargs)
@@ -674,7 +664,6 @@ class AutomationCore:
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
         try:
-            # 改进：同时兼容 {变量名}、${变量名} 和 简写 $变量名 替换模式
             for k, v in self.runtime_memory.items(): 
                 val_str = str(v) if v is not None else ""
                 text = text.replace(f'${{{k}}}', val_str)
@@ -712,10 +701,8 @@ class AutomationCore:
         if self.stop_event.is_set(): return '__STOP__'
         ntype = node['type']
         
-        # 兼容性动态求值（当字符串包含 '$' 或 '{' 符号时，说明可能包含对应规则的变量占位符，触发翻译解析）
         data = {k: (self._replace_variables(v) if isinstance(v, str) and ('$' in v or '{' in v) else v) for k, v in node.get('data', {}).items()}
         
-        # 窗口上下文维护
         if self.context['window_handle']: 
             self._update_context_rect()
         
@@ -730,7 +717,6 @@ class AutomationCore:
         if ntype == 'notify':
             msg = data.get('msg', '执行到此节点')
             
-            # 支持动态显示全部变量的特殊语法（兼容花括号和美元花括号）
             if "{ALL_VARS}" in msg.upper() or "{所有变量}" in msg or "${ALL_VARS}" in msg.upper() or "${所有变量}" in msg:
                 vars_list_str = "\n".join([f"• {k} = {v}" for k, v in self.runtime_memory.items()]) if self.runtime_memory else "（目前无任何内存变量）"
                 msg = msg.replace("${ALL_VARS}", vars_list_str).replace("${all_vars}", vars_list_str).replace("${所有变量}", vars_list_str).replace("{ALL_VARS}", vars_list_str).replace("{all_vars}", vars_list_str).replace("{所有变量}", vars_list_str)
@@ -749,7 +735,7 @@ class AutomationCore:
                 cwd = os.path.dirname(path)
                 if not cwd or not os.path.exists(cwd): 
                     cwd = None
-                subprocess.Popen(cmd_line, shell=True, cwd=cwd)
+                subprocess.Popen(cmd_line, shell=False, cwd=cwd)
                 self.log(f"🚀 启动: {os.path.basename(path)}", "success")
                 return 'out'
             except Exception as e:
@@ -984,7 +970,6 @@ class AutomationCore:
                     kb = Controller()
                     keys = [x.strip().lower() for x in data.get('key_name', 'enter').split('+')]
             
-                    # 按下所有修饰键
                     modifiers = []
                     main_key = None
                     for k in keys:
@@ -993,14 +978,12 @@ class AutomationCore:
                         else:
                             main_key = k
             
-                    # 按下修饰键
                     for m in modifiers:
                         if m == 'alt': kb.press(Key.alt)
                         elif m == 'ctrl': kb.press(Key.ctrl)
                         elif m == 'shift': kb.press(Key.shift)
                         elif m == 'win': kb.press(Key.cmd)
             
-                    # 按下主键
                     if main_key == 'left': kb.press(Key.left)
                     elif main_key == 'right': kb.press(Key.right)
                     elif main_key == 'up': kb.press(Key.up)
@@ -1011,7 +994,6 @@ class AutomationCore:
                     elif main_key == 'escape': kb.press(Key.esc)
                     else: kb.press(main_key)
             
-                    # 释放（先释放主键，再释放修饰键）
                     if main_key:
                         if main_key == 'left': kb.release(Key.left)
                         elif main_key == 'right': kb.release(Key.right)
@@ -1055,7 +1037,6 @@ class AutomationCore:
             return 'yes'
         return 'out'
 
-# --- 5. 历史记录与节点 ---
 class HistoryManager:
     def __init__(self, editor):
         self.editor = editor
@@ -1276,7 +1257,6 @@ class GraphNode:
         if refresh_ui: self.canvas.history.save_state()
         self.data[key] = value
         
-        # 核心修复：添加所有在画布中使用的输入和选择键。当它们变化时触发画布静默重繪，彻底防范微型组件失焦导致的旧文本写回冲突。
         redraw_keys = ['msg', 'seconds', 'count', 'command', 'title', 'text', 'mouse_action', 'cases', 'var_name', 'image', 'images', 'roi_preview', 'path', 'exe_name', 'class_name', '_user_title']
         if key in redraw_keys: 
             self.draw() 
@@ -1331,6 +1311,7 @@ class FlowEditor(tk.Canvas):
         self.config(bg=COLORS['bg_canvas']); self.delete("all");self._draw_grid(); [n.draw() for n in self.nodes.values()]; self.redraw_links()
 
     def _draw_grid(self):
+        self.delete("grid")
         w,h=self.winfo_width(),self.winfo_height(); x1,y1,x2,y2=self.canvasx(0),self.canvasy(0),self.canvasx(w),self.canvasy(h)
         if (step:=int(GRID_SIZE*self.zoom))<5: return
         start_x,start_y=int(x1//step)*step,int(y1//step)*step
@@ -1513,7 +1494,6 @@ class FlowEditor(tk.Canvas):
             self.full_redraw()
         except Exception as e: self.app.log(f"❌ 加载失败: {e}", "error")
 
-# --- 6. 属性面板 ---
 class PropertyPanel(tk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent, bg=COLORS['bg_panel'])
@@ -1574,7 +1554,6 @@ class PropertyPanel(tk.Frame):
         
         if ntype != 'reroute': self._input(self.content, "节点名称", '_user_title', data.get('_user_title', node.title_text))
 
-        # 逻辑类
         if ntype == 'wait': self._input(self.content, "等待秒数", 'seconds', data.get('seconds', 1.0), safe_float)
         elif ntype == 'loop':
              self._chk(self.content, "无限循环", 'infinite', data.get('infinite', True))
@@ -1604,7 +1583,6 @@ class PropertyPanel(tk.Frame):
             else:
                 self._input(sec, "写入内容", 'text', data.get('text', ''))
 
-        # 动作类
         elif ntype == 'bind_win':
             sec = self._create_section("绑定规则")
             self._input(sec, "进程名 (Exe)", 'exe_name', data.get('exe_name', ''))
@@ -1629,7 +1607,6 @@ class PropertyPanel(tk.Frame):
         elif ntype == 'mouse':
             sec = self._create_section("鼠标操作")
             
-            # [显式坐标模式] 允许用户自主选择相对或绝对
             COORD_MODES = {'relative': '相对绑定窗口 (推荐)', 'absolute': '绝对屏幕坐标'}
             curr_mode = data.get('coord_mode', 'relative')
             self._combo(sec, "坐标模式", 'coord_mode', list(COORD_MODES.values()), COORD_MODES.get(curr_mode, '相对绑定窗口 (推荐)'), 
@@ -1686,7 +1663,6 @@ class PropertyPanel(tk.Frame):
                 self._chk(sec, "按回车", 'press_enter', data.get('press_enter', False))
             else: self._input(sec, "组合键", 'key_name', data.get('key_name', '')); tk.Label(sec, text="例: ctrl+c", bg=sec.cget('bg'), fg=COLORS['fg_sub'], font=('Microsoft YaHei', int(9 * SCALE_FACTOR))).pack(anchor='w')
 
-        # 视觉类
         elif ntype == 'image':
             base = self._create_section("目标图像")
             if 'tk_image' in data: self._draw_image_preview(base, data)
@@ -1801,7 +1777,6 @@ class PropertyPanel(tk.Frame):
             top.destroy(); self.app.deiconify()
         top.bind("<Motion>", on_mouse_move); top.bind("<Button-1>", on_click); top.bind("<Escape>", lambda e: [top.destroy(), self.app.deiconify()])
 
-    # Helpers
     def _create_section(self, text):
         f = tk.Frame(self.content, bg=COLORS['bg_panel'], pady=5); f.pack(fill='x')
         tk.Label(f, text=text, bg=COLORS['bg_panel'], fg=COLORS['accent'], font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w')
@@ -1917,7 +1892,9 @@ class PropertyPanel(tk.Frame):
 
     def start_test_match(self): threading.Thread(target=self._test_match_worker, daemon=True).start()
     def _test_match_worker(self):
-        self.app.iconify(); time.sleep(0.5); res_txt = "未找到"
+        self.app.after(0, self.app.iconify)
+        time.sleep(0.5) 
+        res_txt = "未找到"
         try:
             if self.current_node.type == 'if_img':
                 imgs = self.current_node.data.get('images', []); passed = True; screen = VisionEngine.capture_screen()
@@ -1928,8 +1905,14 @@ class PropertyPanel(tk.Frame):
                  strategy = self.current_node.data.get('match_strategy', 'hybrid')
                  res = VisionEngine.locate(self.current_node.data.get('image'), confidence=0.8, strategy=strategy)
                  res_txt = "✅ 找到" if res else "❌ 未找到"
-        except: pass
-        self.app.deiconify(); messagebox.showinfo("测试结果", res_txt)
+        except Exception as e:
+            print(f"Test match error: {e}")
+        
+        def show_result():
+            self.app.deiconify()
+            messagebox.showinfo("测试结果", res_txt)
+        self.app.after(0, show_result)
+
 
     def _toggle_static_monitor(self):
         if self.static_monitor_active:
@@ -1981,11 +1964,10 @@ class PropertyPanel(tk.Frame):
             if vol > 0.001: self.app.log(f"📊 音量峰值: {vol:.4f}", "info")
             time.sleep(0.5)
 
-# --- 7. 设置对话框 ---
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, app):
         super().__init__(parent); self.app = app
-        self.title("设置"); self.geometry("400x300"); self.config(bg=COLORS['bg_panel'])
+        self.title("设置"); self.geometry("400x350"); self.config(bg=COLORS['bg_panel'])
         self.resizable(False, False); self.transient(parent); self.grab_set()
         self.app.stop_hotkeys()
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
@@ -2000,6 +1982,9 @@ class SettingsDialog(tk.Toplevel):
         self._create_hotkey_entry(f_hk, "启动快捷键:", 'start', 0)
         self._create_hotkey_entry(f_hk, "停止快捷键:", 'stop', 1)
         f_hk.columnconfigure(1, weight=1)
+
+        f_assoc = tk.Frame(self, bg=COLORS['bg_panel'], pady=10, padx=20); f_assoc.pack(fill='x')
+        tk.Button(f_assoc, text="🔗 手动注册 .qflow 文件关联", command=lambda: self.app.register_file_association(), bg=COLORS['btn_bg'], fg='white', bd=0, padx=10, pady=5).pack(fill='x')
 
         btn_frame = tk.Frame(self, bg=COLORS['bg_panel'], pady=20); btn_frame.pack(side='bottom', fill='x')
         tk.Button(btn_frame, text="保存并重启UI", command=self.save, bg=COLORS['accent'], fg='white', bd=0, padx=20).pack(side='right', padx=20)
@@ -2038,11 +2023,11 @@ class SettingsDialog(tk.Toplevel):
         SETTINGS['theme'] = self.combo_theme.get(); SETTINGS['hotkey_start'] = self.hk_vars['start'].get(); SETTINGS['hotkey_stop'] = self.hk_vars['stop'].get()
         COLORS.update(THEMES.get(SETTINGS['theme'], THEMES['Dark'])); self.app.refresh_hotkeys(); self.app.restart_ui(); self.destroy()
 
-# --- 8. 主程序 ---
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self, file_path=None, auto_run=False):
         super().__init__()
         self.current_file_path = None
+        self._auto_run_mode = auto_run
         self.geometry("1400x1100")
         try:
             if hasattr(sys, '_MEIPASS'):
@@ -2060,23 +2045,118 @@ class App(tk.Tk):
         
         self.bind("<Control-s>", lambda e: self.save())
         
+        if file_path and os.path.exists(file_path):
+            self.current_file_path = file_path
+            self.after(200, lambda: self._load_initial_file(auto_run))
+            
         self.update_title()
         self.after(100, self._poll_log)
         self.after(500, self.show_welcome_guide)
+        self.after(1000, self.check_file_association)
+
+    def is_file_associated(self):
+        import winreg
+        try:
+            exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
+            if not getattr(sys, 'frozen', False):
+                py_exe = sys.executable
+                if py_exe.lower().endswith("python.exe"): py_exe = py_exe[:-10] + "pythonw.exe"
+                expected_cmd = f'"{py_exe}" "{exe_path}" "%1"'
+            else:
+                expected_cmd = f'"{exe_path}" "%1"'
+                
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\.qflow") as key:
+                if winreg.QueryValueEx(key, "")[0] != "QflowProject": return False
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\QflowProject\shell\open\command") as key:
+                if winreg.QueryValueEx(key, "")[0] != expected_cmd: return False
+            return True
+        except Exception:
+            return False
+
+    def register_file_association(self, silent=False):
+        import winreg
+        try:
+            exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
+            
+            if hasattr(sys, '_MEIPASS'):
+                icon_path = os.path.join(sys._MEIPASS, 'icon2.ico')
+            else:
+                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon2.ico')
+            
+            if not getattr(sys, 'frozen', False):
+                py_exe = sys.executable
+                if py_exe.lower().endswith("python.exe"): py_exe = py_exe[:-10] + "pythonw.exe"
+                cmd_str = f'"{py_exe}" "{exe_path}" "%1"'
+                icon_str = f'"{icon_path}",0' if os.path.exists(icon_path) else f'"{py_exe}",0'
+            else:
+                cmd_str = f'"{exe_path}" "%1"'
+                icon_str = f'"{icon_path}",0' if os.path.exists(icon_path) else f'"{exe_path}",0'
+                
+            key_path = r"Software\Classes\.qflow"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                winreg.SetValue(key, "", winreg.REG_SZ, "QflowProject")
+                
+            key_path_prog = r"Software\Classes\QflowProject"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path_prog) as key:
+                winreg.SetValue(key, "", winreg.REG_SZ, "Qflow 自动化项目")
+                
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path_prog + r"\DefaultIcon") as key:
+                winreg.SetValue(key, "", winreg.REG_SZ, icon_str)
+                
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path_prog + r"\shell\open\command") as key:
+                winreg.SetValue(key, "", winreg.REG_SZ, cmd_str)
+                
+            try:
+                import ctypes
+                ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, None, None)
+            except Exception: pass
+
+            if not silent:
+                messagebox.showinfo("成功", "已成功注册 .qflow 文件关联！\n系统图标已刷新，现在您可以直接双击打开项目文件。")
+        except Exception as e:
+            if not silent:
+                messagebox.showerror("失败", f"注册失败: {e}\n\n建议您以管理员身份重新运行程序后再试。")
+
+    def check_file_association(self):
+        if self._auto_run_mode: return 
+        if not self.is_file_associated():
+            if messagebox.askyesno("提示", "检测到 .qflow 文件未关联到当前程序（或程序路径已变更）。\n\n是否立即将其设置为默认打开方式？"):
+                self.register_file_association(silent=False)
+
+    def _load_initial_file(self, auto_run):
+        try:
+            with open(self.current_file_path, 'r', encoding='utf-8') as fp:
+                self.editor.load_data(json.load(fp))
+            self.update_title()
+            self.log(f"📂 已加载项目: {self.current_file_path}", "success")
+            if auto_run:
+                self.log("🚀 检测到运行参数，即将自动启动...", "info")
+                self.after(500, lambda: self.toggle_run(None))
+        except Exception as e:
+            self.log(f"❌ 加载文件失败: {e}", "error")
 
     def update_title(self):
         filename = os.path.basename(self.current_file_path) if self.current_file_path else "未命名"
-        self.title(f"Qflow 1.7.5 - QwejayHuang - {filename}")
+        title_text = f"Qflow - {filename}"
+        try:
+            title_text = f"{__app_name__} {__version__} - {__author__} - {filename}"
+        except NameError:
+            pass
+        self.title(title_text)
 
     def _setup_ui(self):
         self.configure(bg=COLORS['bg_app'])
         for widget in self.winfo_children(): widget.destroy()
 
         title_bar = tk.Frame(self, bg=COLORS['bg_app'], height=50); title_bar.pack(fill='x', pady=5, padx=20)
-        tk.Label(title_bar, text="QFLOW", font=('Impact', 24), bg=COLORS['bg_app'], fg=COLORS['accent']).pack(side='left', padx=(0, 20))
+        
+        try: app_name = __app_name__
+        except NameError: app_name = "QFLOW"
+        
+        tk.Label(title_bar, text=app_name.upper(), font=('Impact', 24), bg=COLORS['bg_app'], fg=COLORS['accent']).pack(side='left', padx=(0, 20))
         
         ops = tk.Frame(title_bar, bg=COLORS['bg_app']); ops.pack(side='left')
-        for txt, cmd in [("📂 打开", self.load), ("💾 保存", self.save), ("📝 另存", self.save_as), ("🗑️ 清空", self.clear), ("⚙️ 设置", self.open_settings)]:
+        for txt, cmd in [("📂 打开", self.load), ("💾 保存", self.save), ("📝 另存", self.save_as), ("📦 导出EXE", self.export_exe), ("🗑️ 清空", self.clear), ("⚙️ 设置", self.open_settings)]:
             tk.Button(ops, text=txt, command=cmd, bg=COLORS['bg_header'], fg='white', bd=0, padx=10, cursor='hand2', font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
             
         self.btn_run = tk.Button(title_bar, text="▶ 启动", command=lambda: self.toggle_run(None), bg=COLORS['success'], fg='#1f1f1f', font=('Microsoft YaHei', 11, 'bold'), padx=15, bd=0, cursor='hand2'); self.btn_run.pack(side='right')
@@ -2096,7 +2176,7 @@ class App(tk.Tk):
         self.property_panel = PropertyPanel(h_paned, self); h_paned.add(self.property_panel, minsize=280, width=180)
         
         self.log_panel = LogPanel(self.main_paned)
-        self.main_paned.add(self.log_panel, minsize=80, height=130) # 状态栏默认高度
+        self.main_paned.add(self.log_panel, minsize=80, height=130)
         
         self.editor.add_node('start', 100, 100, save_history=False)
 
@@ -2186,11 +2266,10 @@ class App(tk.Tk):
             self.deiconify()
             
             if (n := self.property_panel.current_node): 
-                # 修复: 保存修改前状态，便于后续 Ctrl+Z 撤销
                 self.editor.history.save_state() 
                 
                 if n.type == 'if_img': 
-                    imgs = n.data.get('images', []).copy() # 拷贝防止直接污染引用
+                    imgs = n.data.get('images', []).copy()
                     imgs.append({'id': uuid.uuid4().hex, 'image': img, 'tk_image': ImageUtils.make_thumb(img), 'b64': ImageUtils.img_to_b64(img)})
                     n.update_data('images', imgs, refresh_ui=False)
                 elif n.type == 'if_static':
@@ -2212,7 +2291,6 @@ class App(tk.Tk):
             self.log(f"截图失败: {e}", "error")
 
     def get_active_bind_window_info(self):
-        """查找流程中配置的窗口绑定节点，若窗口处于打开状态，则返回句柄、边界矩形及标题"""
         for nid, node in self.editor.nodes.items():
             if node.type == 'bind_win':
                 exe_name = node.data.get('exe_name', '')
@@ -2233,7 +2311,6 @@ class App(tk.Tk):
                         return {'hwnd': hwnd, 'rect': rect, 'title': title or exe_name or class_name or "未命名窗口"}
         return None
 
-    # --- 统一集成的智能拾取机制 ---
     def pick_coordinate(self): 
         self.iconify()
         self.after(400, lambda: self._coord_overlay('x', 'y'))
@@ -2256,16 +2333,13 @@ class App(tk.Tk):
         c = tk.Canvas(top, bg="black", highlightthickness=0)
         c.pack(fill='both', expand=True)
 
-        # 智能匹配窗口绑定状态
         bind_info = self.get_active_bind_window_info()
         rect = bind_info['rect'] if bind_info else None
         
         if rect:
-            # 扣除多显示器虚拟桌面起始坐标，转为拾取窗口内的画布坐标
             cx1, cy1 = rect.left - VX, rect.top - VY
             cx2, cy2 = (rect.left + rect.width) - VX, (rect.top + rect.height) - VY
             
-            # 在全屏覆盖层上使用高亮虚线框勾勒出用户绑定的窗口边界
             c.create_rectangle(cx1, cy1, cx2, cy2, outline='#64b5f6', width=3, dash=(4,4))
             c.create_text(cx1 + 10, cy1 + 20, text=f"⚓ 绑定窗口范围: {bind_info['title']}", fill='#64b5f6', font=('Microsoft YaHei', 11, 'bold'), anchor='w')
             c.create_text(VW//2, 50, text="[当前为：窗口绑定模式] 拾取的坐标已自动扣除窗口左上角偏移量（保存为相对坐标）", fill='#81c784', font=('Microsoft YaHei', 13, 'bold'), anchor='center')
@@ -2278,7 +2352,6 @@ class App(tk.Tk):
             top.destroy()
             self.deiconify()
             
-            # 使用 Windows 原生 API 检索鼠标当前全局物理绝对坐标，彻底根治多屏与缩放导致的偏移 Bug
             class POINT(ctypes.Structure): _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
             pt = POINT()
             user32.GetCursorPos(ctypes.byref(pt))
@@ -2286,7 +2359,6 @@ class App(tk.Tk):
             
             final_x, final_y = abs_x, abs_y
             if rect:
-                # 求出物理绝对坐标同目标绑定窗口左上角起点的差值
                 final_x = abs_x - rect.left
                 final_y = abs_y - rect.top
                 self.log(f"📍 坐标拾取完成: 相对坐标 ({final_x}, {final_y}) (屏幕绝对坐标: {abs_x}, {abs_y})", "success")
@@ -2301,7 +2373,82 @@ class App(tk.Tk):
         c.bind("<Button-1>", clk)
         top.bind("<Escape>", lambda ev: [top.destroy(), self.deiconify()])
 
-    # 快捷键与运行控制
+    def export_exe(self):
+        project_data = self.editor.get_data()
+        json_str = json.dumps(project_data, ensure_ascii=False)
+        b64_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        target_exe = filedialog.asksaveasfilename(defaultextension=".exe", filetypes=[("Executable", "*.exe")])
+        if not target_exe: return
+        
+        import glob
+        csc_paths = glob.glob(r"C:\Windows\Microsoft.NET\Framework\v4.*\csc.exe")
+        if not csc_paths:
+            messagebox.showerror("错误", "未找到系统内置的 C# 编译器，无法生成 EXE。")
+            return
+        csc_path = csc_paths[-1] 
+        
+        exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
+        is_python = not getattr(sys, 'frozen', False)
+        
+        cs_code = f"""
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+
+class Program {{
+    static void Main(string[] args) {{
+        try {{
+            string b64 = "{b64_str}";
+            byte[] bytes = Convert.FromBase64String(b64);
+            string jsonContent = Encoding.UTF8.GetString(bytes);
+            string tempFile = Path.Combine(Path.GetTempPath(), "qflow_temp_" + Guid.NewGuid().ToString() + ".qflow");
+            File.WriteAllText(tempFile, jsonContent, Encoding.UTF8);
+            
+            ProcessStartInfo psi = new ProcessStartInfo();
+"""
+        if is_python:
+            cs_code += f"""
+            psi.FileName = "pythonw";
+            psi.Arguments = "\\"{exe_path}\\" \\"" + tempFile + "\\" --run";
+"""
+        else:
+            cs_code += f"""
+            psi.FileName = @"{exe_path}";
+            psi.Arguments = "\\"" + tempFile + "\\" --run";
+"""
+            
+        cs_code += """
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            Process.Start(psi);
+        } catch (Exception e) {
+            Console.WriteLine(e.Message);
+        }
+    }
+}
+"""
+        temp_cs = os.path.join(os.environ.get('TEMP', 'C:\\Temp'), "qflow_launcher.cs")
+        try:
+            with open(temp_cs, "w", encoding="utf-8-sig") as f:
+                f.write(cs_code)
+            
+            cmd = f'"{csc_path}" /nologo /target:winexe /out:"{target_exe}" "{temp_cs}"'
+            subprocess.run(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            
+            if os.path.exists(target_exe):
+                self.log(f"📦 成功导出无界面的可执行文件: {target_exe}", "success")
+            else:
+                self.log("❌ 导出EXE失败，可能是安全软件拦截或权限不足", "error")
+        except Exception as e:
+            self.log(f"❌ 导出EXE发生异常: {e}", "error")
+        finally:
+            if os.path.exists(temp_cs):
+                try: os.remove(temp_cs)
+                except: pass
+
     def refresh_hotkeys(self):
         if self.hotkey_listener: self.hotkey_listener.stop()
         try:
@@ -2380,4 +2527,16 @@ class App(tk.Tk):
         self.log("4. 【右键菜单】右键点击 [节点] 可复制或删除；右键点击 [端口] 可清除连线。", "warning")
         self.log("5. 【运行控制】点击上方 [▶ 启动] 或使用快捷键 F9 (启动) / F10 (停止)。", "success")
 
-if __name__ == "__main__": App().mainloop()
+if __name__ == "__main__": 
+    import sys
+    file_to_load = None
+    auto_run = False
+    
+    for arg in sys.argv[1:]:
+        if arg.endswith('.qflow'):
+            file_to_load = arg
+        elif arg == '--run':
+            auto_run = True
+
+    app = App(file_path=file_to_load, auto_run=auto_run)
+    app.mainloop()
