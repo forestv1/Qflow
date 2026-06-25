@@ -904,12 +904,26 @@ class AutomationCore:
                 res = VisionEngine.locate(data.get('image'), confidence=conf, timeout=0, stop_event=self.stop_event, region=search_region, strategy=data.get('match_strategy','hybrid'))
                 if res:
                     with self.io_lock:
+                        # 支持根据节点设置选择直接点击坐标或先移动再点击
                         if (act := data.get('click_type', 'click')) != 'none':
                             rx, ry = data.get('relative_click_pos', (0.5, 0.5))
                             tx = res.left + (res.width * rx) + safe_int(data.get('offset_x', 0))
                             ty = res.top + (res.height * ry) + safe_int(data.get('offset_y', 0))
-                            pyautogui.moveTo(tx, ty)
-                            getattr(pyautogui, {'click':'click','double_click':'doubleClick','right_click':'rightClick'}.get(act, 'click'))()
+                            click_mode = data.get('click_mode', 'move_then_click')
+                            # 计算点击参数
+                            clicks = 2 if act == 'double_click' else (2 if str(data.get('click_count', 1)) in ['2', '双击'] else 1)
+                            button = data.get('mouse_button', 'left')
+                            if click_mode == 'direct_click':
+                                pyautogui.click(x=tx, y=ty, clicks=clicks, button=button, interval=0.1)
+                            else:
+                                pyautogui.moveTo(tx, ty)
+                                # 对于 double_click 等行为，使用对应方法保持原有体验
+                                if act == 'double_click':
+                                    pyautogui.doubleClick()
+                                elif act == 'right_click':
+                                    pyautogui.rightClick()
+                                else:
+                                    pyautogui.click()
                     return 'found'
                 
                 if time.time() - start_time > timeout_val:
@@ -968,7 +982,14 @@ class AutomationCore:
                     
                     if action == 'click' or action == 'double_click': 
                         clicks = 2 if action == 'double_click' else (2 if str(data.get('click_count', 1)) in ['2', '双击'] else 1)
-                        pyautogui.click(x=target_x, y=target_y, clicks=clicks, button=data.get('mouse_button', 'left'), duration=dur, interval=0.1)
+                        button = data.get('mouse_button', 'left')
+                        click_mode = data.get('click_mode', 'move_then_click')
+                        if click_mode == 'direct_click':
+                            # 直接点击：不使用移动持续时间，避免平滑移动鼠标
+                            pyautogui.click(x=target_x, y=target_y, clicks=clicks, button=button, interval=0.1)
+                        else:
+                            pyautogui.moveTo(target_x, target_y, duration=dur)
+                            pyautogui.click(clicks=clicks, button=button, interval=0.1)
                     elif action == 'move': 
                         pyautogui.moveTo(target_x, target_y, duration=dur)
                     elif action == 'scroll':
@@ -1630,6 +1651,9 @@ class PropertyPanel(tk.Frame):
                 curr_clicks = str(data.get('click_count', '1'))
                 disp_clicks = '双击' if curr_clicks in ['2', '双击'] else '单击'
                 self._combo(sec, "次数", 'click_count', ['单击','双击'], disp_clicks, lambda e: self._save('click_count', 1 if e.widget.get()=='单击' else 2, self.current_node, refresh_ui=True))
+                CLICK_MODES = {'direct_click': '直接点击坐标', 'move_then_click': '移动后点击坐标 (默认)'}
+                curr_click_mode = data.get('click_mode', 'move_then_click')
+                self._combo(sec, "模式", 'click_mode', list(CLICK_MODES.values()), CLICK_MODES.get(curr_click_mode, '移动后点击坐标 (默认)'), lambda e: self._save('click_mode', {v:k for k,v in CLICK_MODES.items()}.get(e.widget.get()), self.current_node, refresh_ui=True))
 
             if curr_action in ['click', 'move', 'scroll']:
                 coord = tk.Frame(sec, bg=sec.cget('bg')); coord.pack(fill='x', pady=5)
