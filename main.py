@@ -1692,7 +1692,77 @@ class PropertyPanel(tk.Frame):
                 self._input(sec, "文本", 'text', data.get('text', ''))
                 self._chk(sec, "粘贴模式 (快速/防乱码)", 'use_paste', data.get('use_paste', True))
                 self._chk(sec, "按回车", 'press_enter', data.get('press_enter', False))
-            else: self._input(sec, "组合键", 'key_name', data.get('key_name', '')); tk.Label(sec, text="例: ctrl+c", bg=sec.cget('bg'), fg=COLORS['fg_sub'], font=('Microsoft YaHei', int(9 * SCALE_FACTOR))).pack(anchor='w')
+            else:
+                self._input(sec, "组合键", 'key_name', data.get('key_name', ''))
+                # 可复制粘贴的按键列表
+                tip_frame = tk.Frame(sec, bg=sec.cget('bg'))
+                tip_frame.pack(fill='x', pady=(2, 5))
+                tk.Label(tip_frame, text="💡 点击下方按键可直接复制到输入框", bg=sec.cget('bg'),
+                         fg=COLORS['fg_sub'], font=('Microsoft YaHei', int(8 * SCALE_FACTOR))).pack(anchor='w')
+                tip_text_widget = tk.Text(tip_frame, height=13, bg=COLORS['input_bg'], fg='white',
+                                          bd=0, font=('Consolas', int(9 * SCALE_FACTOR)), wrap='word', padx=6, pady=4)
+                tip_text_widget.pack(fill='x', pady=(3, 0))
+                tip_text_widget.insert('1.0', """【修饰键】 ctrl, alt, shift, win
+【方向键】 up, down, left, right
+【功能键】 f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12
+【导航键】 home, end, pageup, enter, tab, space
+【编辑键】 backspace, delete, insert
+【数字键】 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+【小键盘】 num0, num1, num2, num3, num4, num5, num6, num7, num8, num9, numlock
+【系统键】 esc, printscreen, pause, sleep, caps lock
+【媒体键】 volumeup, volumedown, nexttrack
+【组合键】 ctrl+c, alt+tab, win+d, ctrl+shift+esc""")
+                tip_text_widget.config(state='disabled')
+                # 用 tag 标记每个可点击的按键值
+                tip_text_widget.config(state='normal')
+                # 解析各行，给每个按键值加 tag
+                for line_idx in range(1, int(tip_text_widget.index('end-1c').split('.')[0]) + 1):
+                    line_text = tip_text_widget.get(f"{line_idx}.0", f"{line_idx}.end")
+                    if '】' not in line_text:
+                        continue
+                    content = line_text.split('】', 1)[1].strip()
+                    # 用 ', ' 分割各按键
+                    tokens = content.split(', ')
+                    # 在行中找到每个 token 的精确位置
+                    search_start = f"{line_idx}.0"
+                    for token in tokens:
+                        # 在行内搜索 token
+                        try:
+                            pos = tip_text_widget.search(token, search_start, f"{line_idx}.end")
+                            if pos:
+                                end_pos = f"{pos}+{len(token)}c"
+                                tip_text_widget.tag_add(f"key_{pos.replace('.','_')}", pos, end_pos)
+                                search_start = end_pos
+                        except:
+                            pass
+                tip_text_widget.config(state='disabled')
+                # 给所有按键 tag 设置样式和点击绑定
+                def on_key_tag_click(event):
+                    tip_text_widget.config(state='normal')
+                    # 获取点击位置的所有 tag
+                    idx = tip_text_widget.index(f"@{event.x},{event.y}")
+                    tags = tip_text_widget.tag_names(idx)
+                    key_tag = None
+                    for t in tags:
+                        if t.startswith('key_'):
+                            key_tag = t
+                            break
+                    if key_tag:
+                        # 获取该 tag 覆盖的文本
+                        ranges = tip_text_widget.tag_ranges(key_tag)
+                        if ranges:
+                            val = tip_text_widget.get(ranges[0], ranges[1])
+                            self._save('key_name', val, self.current_node, refresh_ui=True)
+                            # 刷新输入框显示
+                            for w in sec.winfo_children():
+                                if isinstance(w, tk.Frame):
+                                    for sw in w.winfo_children():
+                                        if isinstance(sw, tk.Entry):
+                                            sw.delete(0, 'end')
+                                            sw.insert(0, val)
+                                            break
+                    tip_text_widget.config(state='disabled')
+                tip_text_widget.bind("<Button-1>", on_key_tag_click)
 
         elif ntype == 'image':
             base = self._create_section("目标图像")
